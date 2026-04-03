@@ -112,6 +112,9 @@ python hn_costs.py \
 
 - This version indexes both stories and a small number of selected comments per story.
 - The comment selection is intentionally simple: longer comments are favored, with extra weight for points and replies when available.
+- Low-quality and suspicious comments are filtered out before indexing, including obvious spam and prompt-injection-like text.
+- Retrieved source text is truncated and treated as untrusted data before it is passed to the answer model.
+- Search uses a lightweight relevance check before the final answer step, and falls back to sources-only behavior when the retrieved HN material is not relevant enough.
 - Algolia HN search is relevance-oriented and filterable, but not vector/semantic search, so this project adds a different retrieval layer on top.
 - `hn_ingest.py` estimates the cost of the pending ingest and asks for confirmation before embedding and upserting.
 - `hn_costs.py` is still useful for what-if planning, and uses OpenAI's current public prices for `text-embedding-3-small` and `gpt-5.4-mini` by default while estimating Pinecone usage from vector size, read units, and write units.

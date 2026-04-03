@@ -7,6 +7,7 @@ from hn_story_index import (
     print_sources,
     print_semantic_matches,
     semantic_search,
+    should_answer_query,
 )
 
 
@@ -41,7 +42,10 @@ def run_search(args: argparse.Namespace) -> None:
         print("No matches found.")
         return
 
-    answer = answer_with_llm(args.query, matches)
+    if should_answer_query(args.query, matches):
+        answer = answer_with_llm(args.query, matches)
+    else:
+        answer = "The retrieved Hacker News material is not relevant enough to answer that query."
     print("\nAnswer:\n")
     print(answer)
     print_sources(matches)
