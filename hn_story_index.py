@@ -1,5 +1,4 @@
 import html
-import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -8,58 +7,6 @@ import requests
 
 from hn_clients import openai_client
 from hn_config import CHAT_MODEL, EMBEDDING_MODEL, HN_SEARCH_BASE, NAMESPACE
-
-
-SUPPORTED_QUERY_KEYWORDS = {
-    "tech",
-    "technology",
-    "software",
-    "engineering",
-    "engineer",
-    "developer",
-    "developers",
-    "programming",
-    "code",
-    "coding",
-    "startup",
-    "startups",
-    "business",
-    "company",
-    "companies",
-    "market",
-    "markets",
-    "product",
-    "products",
-    "saas",
-    "b2b",
-    "sales",
-    "pricing",
-    "revenue",
-    "profit",
-    "profits",
-    "enterprise",
-    "management",
-    "founder",
-    "founders",
-    "vc",
-    "venture",
-    "remote",
-    "work",
-    "hiring",
-    "career",
-    "careers",
-    "ai",
-    "ml",
-    "llm",
-    "automation",
-    "cloud",
-    "infra",
-    "infrastructure",
-    "database",
-    "security",
-    "crypto",
-    "fintech",
-}
 
 
 def story_discussion_url(object_id: str) -> str:
@@ -72,30 +19,6 @@ def clean_text(value: Optional[str]) -> str:
     text = html.unescape(str(value))
     text = text.replace("\r", " ").replace("\n", " ").replace("\t", " ")
     return " ".join(text.split()).strip()
-
-
-def is_supported_query(query: str) -> bool:
-    normalized = clean_text(query).lower()
-    if not normalized:
-        return False
-
-    tokens = set(re.findall(r"[a-z0-9+#.-]+", normalized))
-    if tokens & SUPPORTED_QUERY_KEYWORDS:
-        return True
-
-    supported_phrases = (
-        "hacker news",
-        "silicon valley",
-        "open source",
-        "remote work",
-        "artificial intelligence",
-        "machine learning",
-        "venture capital",
-        "product market fit",
-        "software engineer",
-        "developer tools",
-    )
-    return any(phrase in normalized for phrase in supported_phrases)
 
 
 def to_unix_seconds(dt: datetime) -> int:
@@ -520,8 +443,11 @@ def build_answer_prompt(query: str, matches: List[Dict[str, Any]]) -> str:
 
     return (
         "You are answering questions about Hacker News stories and comments.\n"
+        "Your domain is technology, business, startups, software, and other topics that fit Hacker News.\n"
         "Use only the provided sources.\n"
         "If the sources are insufficient, say so.\n"
+        "First decide whether the user's query is meaningfully related to the retrieved sources.\n"
+        "If the query is unrelated to the retrieved sources, do not answer the question. Instead output one short plain-text sentence saying the retrieved Hacker News material is not relevant enough to answer.\n"
         "Write a detailed, source-grounded answer rather than a single short paragraph.\n"
         "Output plain text only for a CLI. Do not use Markdown, headings, bullets, or numbered lists.\n"
         "Organize the response as a few compact paragraphs in this order:\n"

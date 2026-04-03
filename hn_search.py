@@ -4,7 +4,6 @@ from hn_clients import ensure_index
 from hn_config import INDEX_NAME, NAMESPACE
 from hn_story_index import (
     answer_with_llm,
-    is_supported_query,
     print_sources,
     print_semantic_matches,
     semantic_search,
@@ -28,12 +27,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_search(args: argparse.Namespace) -> None:
-    if not is_supported_query(args.query):
-        print(
-            "No answer: queries must be about technology or business topics relevant to Hacker News."
-        )
-        return
-
     index = ensure_index(INDEX_NAME)
     matches = semantic_search(
         index=index,

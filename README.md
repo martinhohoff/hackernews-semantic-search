@@ -73,7 +73,7 @@ python hn_search.py "threads about AI replacing junior developers" --top-k 8
 
 The default search output includes a detailed plain-text answer for the CLI, followed by a Sources section.
 
-Search is limited to technology and business-related questions. For unrelated topics, the script returns no answer.
+Search always retrieves the closest Hacker News stories/comments first. The answer model is instructed to answer only when the retrieved material is actually relevant to the query. Otherwise it returns a short “not relevant enough to answer” message and still prints the sources.
 
 Search and also print raw retrieved matches:
 
