@@ -28,7 +28,7 @@ PINECONE_REGION=us-east-1
 
 ## Scripts
 
-- `hn_ingest.py`: fetches stories, estimates ingest cost, asks for confirmation, and upserts to Pinecone
+- `hn_ingest.py`: fetches stories, selects useful comments, estimates ingest cost, asks for confirmation, and upserts to Pinecone
 - `hn_search.py`: runs semantic retrieval and optional grounded answers
 - `hn_costs.py`: standalone what-if cost calculator
 
@@ -41,6 +41,12 @@ python hn_ingest.py --max-stories 2000 --min-points 50 --months-back 12
 ```
 
 The ingest command prints an estimated OpenAI embedding cost and Pinecone write/storage footprint, then asks for confirmation before it upserts anything.
+
+By default it indexes stories plus up to 3 selected comments per story. To keep a story-only index:
+
+```bash
+python hn_ingest.py --max-stories 2000 --min-points 50 --months-back 12 --no-comments
+```
 
 Skip the confirmation prompt:
 
@@ -92,15 +98,16 @@ python hn_costs.py \
 ## What It Does
 
 - Pulls recent HN stories from Algolia using `search_by_date`, `tags=story`, and numeric filters for points and date.
-- Turns each story into a semantic document using title, author, points, URL, and story text.
+- Pulls selected comment threads for each story from Algolia's item API and keeps a small number of longer comments per story.
+- Turns both stories and selected comments into semantic documents with story context attached.
 - Embeds those documents with `text-embedding-3-small` and stores them in Pinecone.
-- Embeds the user's query, retrieves the nearest stories semantically, and optionally asks an LLM to summarize them.
+- Embeds the user's query, retrieves the nearest stories or comments semantically, and optionally asks an LLM to summarize them.
 - Supports Pinecone metadata filters at search time, so you can further restrict by points or recency.
 
 ## Notes
 
-- This version indexes stories only, which keeps the first version simple and much smaller.
-- If you want "what HN thinks" to get better, the next upgrade is adding selected comments as separate vectors.
+- This version indexes both stories and a small number of selected comments per story.
+- The comment selection is intentionally simple: longer comments are favored, with extra weight for points and replies when available.
 - Algolia HN search is relevance-oriented and filterable, but not vector/semantic search, so this project adds a different retrieval layer on top.
 - `hn_ingest.py` estimates the cost of the pending ingest and asks for confirmation before embedding and upserting.
 - `hn_costs.py` is still useful for what-if planning, and uses OpenAI's current public prices for `text-embedding-3-small` and `gpt-5.4-mini` by default while estimating Pinecone usage from vector size, read units, and write units.

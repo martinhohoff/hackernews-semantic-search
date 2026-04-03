@@ -9,7 +9,7 @@ from hn_costs import (
     calculate_cost_estimate,
     print_cost_estimate,
 )
-from hn_story_index import average_story_chars, fetch_hn_stories, upsert_stories
+from hn_story_index import average_record_chars, build_index_records, fetch_hn_stories, upsert_records
 
 
 def confirm_continue() -> bool:
@@ -38,6 +38,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pinecone-write-price-per-million-wu", type=float, default=None)
     parser.add_argument("--avg-metadata-bytes", type=int, default=DEFAULT_METADATA_BYTES)
     parser.add_argument("--avg-id-bytes", type=int, default=DEFAULT_ID_BYTES)
+    parser.add_argument(
+        "--no-comments",
+        action="store_true",
+        help="Index only stories and skip selected comments",
+    )
+    parser.add_argument(
+        "--comments-per-story",
+        type=int,
+        default=3,
+        help="Number of selected comments to index per story",
+    )
+    parser.add_argument(
+        "--min-comment-length",
+        type=int,
+        default=80,
+        help="Minimum cleaned comment length to consider for indexing",
+    )
+    parser.add_argument(
+        "--comment-sleep",
+        type=float,
+        default=0.1,
+        help="Delay between fetching story comment threads",
+    )
     return parser
 
 
@@ -55,9 +78,21 @@ def run_ingest(args: argparse.Namespace) -> None:
         print("No stories found.")
         return
 
+    records = build_index_records(
+        stories,
+        include_comments=not args.no_comments,
+        comments_per_story=args.comments_per_story,
+        min_comment_length=args.min_comment_length,
+        comment_sleep_s=args.comment_sleep,
+    )
+    num_comment_records = max(len(records) - len(stories), 0)
+    print(
+        f"Prepared {len(stories)} story records and {num_comment_records} comment records for indexing."
+    )
+
     estimate = calculate_cost_estimate(
-        stories=len(stories),
-        avg_chars_per_story=average_story_chars(stories),
+        stories=len(records),
+        avg_chars_per_story=average_record_chars(records),
         queries_per_month=0,
         answer_rate=0.0,
         avg_query_chars=0,
@@ -78,6 +113,7 @@ def run_ingest(args: argparse.Namespace) -> None:
     print_cost_estimate(
         estimate,
         chars_per_token=args.chars_per_token,
+        unit_label="records",
         include_monthly_sections=False,
     )
 
@@ -85,9 +121,9 @@ def run_ingest(args: argparse.Namespace) -> None:
         print("Cancelled before embedding and upsert.")
         return
 
-    upsert_stories(
+    upsert_records(
         index=index,
-        stories=stories,
+        records=records,
         namespace=NAMESPACE,
         batch_size=args.batch_size,
     )

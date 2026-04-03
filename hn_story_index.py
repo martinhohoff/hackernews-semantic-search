@@ -9,6 +9,10 @@ from hn_clients import openai_client
 from hn_config import CHAT_MODEL, EMBEDDING_MODEL, HN_SEARCH_BASE, NAMESPACE
 
 
+def story_discussion_url(object_id: str) -> str:
+    return f"https://news.ycombinator.com/item?id={object_id}"
+
+
 def clean_text(value: Optional[str]) -> str:
     if value is None:
         return ""
@@ -128,52 +132,196 @@ def story_to_document(story: Dict[str, Any]) -> str:
     return "\n".join(part for part in parts if clean_text(part))
 
 
-def average_story_chars(stories: List[Dict[str, Any]]) -> float:
-    docs = [story_to_document(story) for story in stories]
+def comment_to_document(comment: Dict[str, Any], story: Dict[str, Any]) -> str:
+    parts = [
+        f"Story title: {story.get('title', '')}",
+        f"Story author: {story.get('author', '')}",
+        f"Story URL: {story.get('url', '')}",
+        f"Comment author: {comment.get('author', '')}",
+        f"Comment points: {comment.get('points', 0)}",
+        f"Comment replies: {comment.get('num_children', 0)}",
+        f"Comment text: {comment.get('text', '')}",
+    ]
+    return "\n".join(part for part in parts if clean_text(part))
+
+
+def record_to_document(record: Dict[str, Any]) -> str:
+    return record["document"]
+
+
+def average_record_chars(records: List[Dict[str, Any]]) -> float:
+    docs = [record_to_document(record) for record in records]
     if not docs:
         return 0.0
     return sum(len(doc) for doc in docs) / len(docs)
 
 
-def upsert_stories(
-    index,
+def fetch_story_item(object_id: str) -> Dict[str, Any]:
+    response = requests.get(
+        f"{HN_SEARCH_BASE}/items/{object_id}",
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def flatten_comment_tree(
+    children: List[Dict[str, Any]],
+    *,
+    depth: int = 1,
+) -> List[Dict[str, Any]]:
+    flattened: List[Dict[str, Any]] = []
+    for child in children or []:
+        text = clean_text(child.get("text"))
+        if text:
+            grandchildren = child.get("children") or []
+            flattened.append(
+                {
+                    "id": str(child.get("id", "")).strip(),
+                    "author": clean_text(child.get("author")),
+                    "text": text,
+                    "created_at": child.get("created_at", ""),
+                    "created_at_i": int(child.get("created_at_i") or 0),
+                    "points": int(child.get("points") or 0),
+                    "depth": depth,
+                    "num_children": len(grandchildren),
+                }
+            )
+        flattened.extend(flatten_comment_tree(child.get("children") or [], depth=depth + 1))
+    return flattened
+
+
+def fetch_selected_comments_for_story(
+    story: Dict[str, Any],
+    *,
+    comments_per_story: int,
+    min_comment_length: int,
+) -> List[Dict[str, Any]]:
+    item = fetch_story_item(story["object_id"])
+    candidates = flatten_comment_tree(item.get("children") or [])
+    filtered = [
+        candidate
+        for candidate in candidates
+        if candidate["id"] and len(candidate["text"]) >= min_comment_length
+    ]
+    filtered.sort(
+        key=lambda candidate: (
+            candidate["points"],
+            candidate["num_children"],
+            len(candidate["text"]),
+            -candidate["depth"],
+        ),
+        reverse=True,
+    )
+    return filtered[:comments_per_story]
+
+
+def story_to_record(story: Dict[str, Any]) -> Dict[str, Any]:
+    doc = story_to_document(story)
+    return {
+        "id": story["id"],
+        "document": doc,
+        "metadata": {
+            "kind": "story",
+            "object_id": story["object_id"],
+            "title": story.get("title", ""),
+            "story_title": story.get("title", ""),
+            "url": story.get("url", ""),
+            "discussion_url": story_discussion_url(story["object_id"]),
+            "author": story.get("author", ""),
+            "points": int(story.get("points", 0)),
+            "num_comments": int(story.get("num_comments", 0)),
+            "created_at": story.get("created_at", ""),
+            "created_at_i": int(story.get("created_at_i") or 0),
+            "text": doc,
+        },
+    }
+
+
+def comment_to_record(comment: Dict[str, Any], story: Dict[str, Any]) -> Dict[str, Any]:
+    doc = comment_to_document(comment, story)
+    return {
+        "id": f"comment-{comment['id']}",
+        "document": doc,
+        "metadata": {
+            "kind": "comment",
+            "object_id": comment["id"],
+            "story_object_id": story["object_id"],
+            "title": f"Comment on: {story.get('title', '')}",
+            "story_title": story.get("title", ""),
+            "url": story.get("url", ""),
+            "discussion_url": story_discussion_url(story["object_id"]),
+            "author": comment.get("author", ""),
+            "points": int(comment.get("points", 0)),
+            "num_comments": int(comment.get("num_children", 0)),
+            "created_at": comment.get("created_at", ""),
+            "created_at_i": int(comment.get("created_at_i") or 0),
+            "text": doc,
+            "comment_text": comment.get("text", ""),
+            "depth": int(comment.get("depth", 0)),
+        },
+    }
+
+
+def build_index_records(
     stories: List[Dict[str, Any]],
+    *,
+    include_comments: bool = True,
+    comments_per_story: int = 3,
+    min_comment_length: int = 80,
+    comment_sleep_s: float = 0.1,
+) -> List[Dict[str, Any]]:
+    records = [story_to_record(story) for story in stories]
+    comment_records: List[Dict[str, Any]] = []
+
+    if include_comments and comments_per_story > 0:
+        for i, story in enumerate(stories, start=1):
+            selected_comments = fetch_selected_comments_for_story(
+                story,
+                comments_per_story=comments_per_story,
+                min_comment_length=min_comment_length,
+            )
+            comment_records.extend(
+                comment_to_record(comment, story) for comment in selected_comments
+            )
+            print(
+                f"Selected comments for story {i}/{len(stories)} | added={len(selected_comments)} | total_comments={len(comment_records)}"
+            )
+            time.sleep(comment_sleep_s)
+
+    return records + comment_records
+
+
+def upsert_records(
+    index,
+    records: List[Dict[str, Any]],
     namespace: str = NAMESPACE,
     batch_size: int = 100,
 ) -> None:
     total = 0
 
-    for start in range(0, len(stories), batch_size):
-        batch = stories[start : start + batch_size]
-        docs = [story_to_document(story) for story in batch]
+    for start in range(0, len(records), batch_size):
+        batch = records[start : start + batch_size]
+        docs = [record["document"] for record in batch]
         embeddings = embed_texts(docs)
 
         vectors = []
-        for story, embedding, doc in zip(batch, embeddings, docs):
+        for record, embedding, doc in zip(batch, embeddings, docs):
+            metadata = dict(record["metadata"])
+            metadata["text"] = doc
             vectors.append(
                 {
-                    "id": story["id"],
+                    "id": record["id"],
                     "values": embedding,
-                    "metadata": {
-                        "kind": "story",
-                        "object_id": story["object_id"],
-                        "title": story.get("title", ""),
-                        "url": story.get("url", ""),
-                        "author": story.get("author", ""),
-                        "points": int(story.get("points", 0)),
-                        "num_comments": int(story.get("num_comments", 0)),
-                        "created_at": story.get("created_at", ""),
-                        "created_at_i": int(story.get("created_at_i") or 0),
-                        "text": doc,
-                    },
+                    "metadata": metadata,
                 }
             )
 
         index.upsert(vectors=vectors, namespace=namespace)
         total += len(vectors)
-        print(f"Upserted {total}/{len(stories)}")
+        print(f"Upserted {total}/{len(records)}")
 
-    print(f"Done. Upserted {total} stories.")
+    print(f"Done. Upserted {total} records.")
 
 
 def build_filter(
@@ -225,9 +373,12 @@ def semantic_search(
         matches.append(
             {
                 "id": match.id,
+                "kind": metadata.get("kind", "story"),
                 "score": float(match.score),
                 "title": metadata.get("title", ""),
+                "story_title": metadata.get("story_title", metadata.get("title", "")),
                 "url": metadata.get("url", ""),
+                "discussion_url": metadata.get("discussion_url", ""),
                 "author": metadata.get("author", ""),
                 "points": metadata.get("points", 0),
                 "num_comments": metadata.get("num_comments", 0),
@@ -244,10 +395,14 @@ def print_semantic_matches(matches: List[Dict[str, Any]]) -> None:
     for i, match in enumerate(matches, start=1):
         print(f"{i}. {match['title']}")
         print(
-            f"   score={match['score']:.4f} | points={match['points']} | comments={match['num_comments']}"
+            f"   kind={match['kind']} | score={match['score']:.4f} | points={match['points']} | comments={match['num_comments']}"
         )
-        print(f"   author={match['author']} | date={match['created_at']}")
-        print(f"   url={match['url']}")
+        if match["kind"] == "comment":
+            print(f"   story={match['story_title']}")
+        print(
+            f"   author={match['author']} | date={match['created_at']}"
+        )
+        print(f"   url={match['discussion_url'] or match['url']}")
         print()
 
 
@@ -259,12 +414,14 @@ def build_answer_prompt(query: str, matches: List[Dict[str, Any]]) -> str:
             "\n".join(
                 [
                     f"[Source {i}]",
+                    f"Kind: {match.get('kind', 'story')}",
                     f"Title: {match.get('title', '')}",
+                    f"Story title: {match.get('story_title', '')}",
                     f"Author: {match.get('author', '')}",
                     f"Points: {match.get('points', 0)}",
                     f"Comments: {match.get('num_comments', 0)}",
                     f"Date: {match.get('created_at', '')}",
-                    f"URL: {match.get('url', '')}",
+                    f"URL: {match.get('discussion_url') or match.get('url', '')}",
                     f"Content: {match.get('text', '')}",
                 ]
             )
@@ -273,7 +430,7 @@ def build_answer_prompt(query: str, matches: List[Dict[str, Any]]) -> str:
     joined_context = "\n\n---\n\n".join(context_blocks)
 
     return (
-        "You are answering questions about Hacker News stories.\n"
+        "You are answering questions about Hacker News stories and comments.\n"
         "Use only the provided sources.\n"
         "If the sources are insufficient, say so.\n"
         "Prefer concrete, source-grounded answers over broad claims.\n\n"

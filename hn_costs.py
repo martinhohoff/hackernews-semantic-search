@@ -178,6 +178,7 @@ def print_cost_estimate(
     estimate: Dict[str, float],
     *,
     chars_per_token: float,
+    unit_label: str = "stories",
     include_monthly_sections: bool = True,
     pinecone_storage_price_per_gb_month: Optional[float] = None,
     pinecone_read_price_per_million_ru: Optional[float] = None,
@@ -185,7 +186,7 @@ def print_cost_estimate(
 ) -> None:
     print("HN Semantic Search Cost Estimate")
     print("=" * 32)
-    print(f"Stories indexed: {int(round(estimate['stories'])):,}")
+    print(f"{unit_label.capitalize()} indexed: {int(round(estimate['stories'])):,}")
 
     if include_monthly_sections:
         print(f"Queries per month: {int(round(estimate['queries_per_month'])):,}")
