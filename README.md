@@ -29,7 +29,7 @@ PINECONE_REGION=us-east-1
 ## Scripts
 
 - `hn_ingest.py`: fetches stories, selects useful comments, estimates ingest cost, asks for confirmation, and upserts to Pinecone
-- `hn_search.py`: runs semantic retrieval and optional grounded answers
+- `hn_search.py`: answers questions using retrieved stories and comments, always prints sources, and can optionally show raw match output
 - `hn_costs.py`: standalone what-if cost calculator
 
 ## Usage
@@ -71,10 +71,14 @@ Search:
 python hn_search.py "threads about AI replacing junior developers" --top-k 8
 ```
 
-Search with a grounded answer:
+The default search output includes a detailed answer grounded in the retrieved material, followed by a Sources section.
+
+Search is limited to technology and business-related questions. For unrelated topics, the script returns no answer.
+
+Search and also print raw retrieved matches:
 
 ```bash
-python hn_search.py "What does HN think about remote work burnout?" --top-k 8 --answer
+python hn_search.py "What does HN think about remote work burnout?" --top-k 8 --raw-matches
 ```
 
 Estimate OpenAI and Pinecone costs ahead of time:
@@ -101,7 +105,7 @@ python hn_costs.py \
 - Pulls selected comment threads for each story from Algolia's item API and keeps a small number of longer comments per story.
 - Turns both stories and selected comments into semantic documents with story context attached.
 - Embeds those documents with `text-embedding-3-small` and stores them in Pinecone.
-- Embeds the user's query, retrieves the nearest stories or comments semantically, and optionally asks an LLM to summarize them.
+- Embeds the user's query, retrieves the nearest stories or comments semantically, and answers the question from those retrieved sources.
 - Supports Pinecone metadata filters at search time, so you can further restrict by points or recency.
 
 ## Notes

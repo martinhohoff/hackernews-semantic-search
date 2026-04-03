@@ -4,6 +4,8 @@ from hn_clients import ensure_index
 from hn_config import INDEX_NAME, NAMESPACE
 from hn_story_index import (
     answer_with_llm,
+    is_supported_query,
+    print_sources,
     print_semantic_matches,
     semantic_search,
 )
@@ -11,17 +13,27 @@ from hn_story_index import (
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run semantic search over indexed Hacker News stories."
+        description="Answer questions over indexed Hacker News stories and comments."
     )
     parser.add_argument("query", type=str)
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--filter-min-points", type=int, default=None)
     parser.add_argument("--filter-months-back", type=int, default=None)
-    parser.add_argument("--answer", action="store_true")
+    parser.add_argument(
+        "--raw-matches",
+        action="store_true",
+        help="Print retrieved matches in addition to the answer",
+    )
     return parser
 
 
 def run_search(args: argparse.Namespace) -> None:
+    if not is_supported_query(args.query):
+        print(
+            "No answer: queries must be about technology or business topics relevant to Hacker News."
+        )
+        return
+
     index = ensure_index(INDEX_NAME)
     matches = semantic_search(
         index=index,
@@ -36,12 +48,13 @@ def run_search(args: argparse.Namespace) -> None:
         print("No matches found.")
         return
 
-    print_semantic_matches(matches)
+    answer = answer_with_llm(args.query, matches)
+    print("\nAnswer:\n")
+    print(answer)
+    print_sources(matches)
 
-    if args.answer:
-        answer = answer_with_llm(args.query, matches)
-        print("\nAnswer:\n")
-        print(answer)
+    if args.raw_matches:
+        print_semantic_matches(matches)
 
 
 def main() -> None:

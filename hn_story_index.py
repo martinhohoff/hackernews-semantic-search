@@ -1,4 +1,5 @@
 import html
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -7,6 +8,58 @@ import requests
 
 from hn_clients import openai_client
 from hn_config import CHAT_MODEL, EMBEDDING_MODEL, HN_SEARCH_BASE, NAMESPACE
+
+
+SUPPORTED_QUERY_KEYWORDS = {
+    "tech",
+    "technology",
+    "software",
+    "engineering",
+    "engineer",
+    "developer",
+    "developers",
+    "programming",
+    "code",
+    "coding",
+    "startup",
+    "startups",
+    "business",
+    "company",
+    "companies",
+    "market",
+    "markets",
+    "product",
+    "products",
+    "saas",
+    "b2b",
+    "sales",
+    "pricing",
+    "revenue",
+    "profit",
+    "profits",
+    "enterprise",
+    "management",
+    "founder",
+    "founders",
+    "vc",
+    "venture",
+    "remote",
+    "work",
+    "hiring",
+    "career",
+    "careers",
+    "ai",
+    "ml",
+    "llm",
+    "automation",
+    "cloud",
+    "infra",
+    "infrastructure",
+    "database",
+    "security",
+    "crypto",
+    "fintech",
+}
 
 
 def story_discussion_url(object_id: str) -> str:
@@ -19,6 +72,30 @@ def clean_text(value: Optional[str]) -> str:
     text = html.unescape(str(value))
     text = text.replace("\r", " ").replace("\n", " ").replace("\t", " ")
     return " ".join(text.split()).strip()
+
+
+def is_supported_query(query: str) -> bool:
+    normalized = clean_text(query).lower()
+    if not normalized:
+        return False
+
+    tokens = set(re.findall(r"[a-z0-9+#.-]+", normalized))
+    if tokens & SUPPORTED_QUERY_KEYWORDS:
+        return True
+
+    supported_phrases = (
+        "hacker news",
+        "silicon valley",
+        "open source",
+        "remote work",
+        "artificial intelligence",
+        "machine learning",
+        "venture capital",
+        "product market fit",
+        "software engineer",
+        "developer tools",
+    )
+    return any(phrase in normalized for phrase in supported_phrases)
 
 
 def to_unix_seconds(dt: datetime) -> int:
@@ -406,6 +483,18 @@ def print_semantic_matches(matches: List[Dict[str, Any]]) -> None:
         print()
 
 
+def print_sources(matches: List[Dict[str, Any]]) -> None:
+    print("\nSources:\n")
+    for i, match in enumerate(matches, start=1):
+        source_url = match["discussion_url"] or match["url"]
+        if match["kind"] == "comment":
+            label = f"{i}. [Comment] {match['story_title']}"
+        else:
+            label = f"{i}. [Story] {match['title']}"
+        print(label)
+        print(f"   author={match['author']} | date={match['created_at']} | url={source_url}")
+
+
 def build_answer_prompt(query: str, matches: List[Dict[str, Any]]) -> str:
     context_blocks = []
 
@@ -433,7 +522,15 @@ def build_answer_prompt(query: str, matches: List[Dict[str, Any]]) -> str:
         "You are answering questions about Hacker News stories and comments.\n"
         "Use only the provided sources.\n"
         "If the sources are insufficient, say so.\n"
-        "Prefer concrete, source-grounded answers over broad claims.\n\n"
+        "Write a detailed, source-grounded answer rather than a single short paragraph.\n"
+        "Use this structure:\n"
+        "1. Direct answer: 2-4 sentences answering the question.\n"
+        "2. Main themes: 2-4 bullet points explaining the main ideas in the sources.\n"
+        "3. Evidence from sources: 1 short paragraph connecting the strongest sources to the answer.\n"
+        "4. Disagreement or nuance: mention conflicting views or uncertainty when present.\n"
+        "5. Sources: list the most relevant source numbers in brackets.\n"
+        "Prefer specific claims that can be traced back to the retrieved material.\n"
+        "Do not invent facts beyond the sources.\n\n"
         f"User query:\n{query}\n\n"
         f"Retrieved sources:\n{joined_context}"
     )
