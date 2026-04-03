@@ -71,7 +71,7 @@ Search:
 python hn_search.py "threads about AI replacing junior developers" --top-k 8
 ```
 
-The default search output includes a detailed answer grounded in the retrieved material, followed by a Sources section.
+The default search output includes a detailed plain-text answer for the CLI, followed by a Sources section.
 
 Search is limited to technology and business-related questions. For unrelated topics, the script returns no answer.
 
