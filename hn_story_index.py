@@ -1,40 +1,12 @@
-import os
-import time
 import html
-import argparse
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
-from dotenv import load_dotenv
-from openai import OpenAI
-from pinecone import Pinecone, ServerlessSpec
 
-
-load_dotenv()
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-
-INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "hn-semantic-search")
-NAMESPACE = os.getenv("PINECONE_NAMESPACE", "stories")
-
-EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-5.4-mini")
-
-PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")
-PINECONE_REGION = os.getenv("PINECONE_REGION", "us-east-1")
-
-HN_SEARCH_BASE = "https://hn.algolia.com/api/v1"
-
-if not OPENAI_API_KEY:
-    raise ValueError("Missing OPENAI_API_KEY")
-if not PINECONE_API_KEY:
-    raise ValueError("Missing PINECONE_API_KEY")
-
-
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
-pc = Pinecone(api_key=PINECONE_API_KEY)
+from hn_clients import openai_client
+from hn_config import CHAT_MODEL, EMBEDDING_MODEL, HN_SEARCH_BASE, NAMESPACE
 
 
 def clean_text(value: Optional[str]) -> str:
@@ -49,32 +21,8 @@ def to_unix_seconds(dt: datetime) -> int:
     return int(dt.replace(tzinfo=timezone.utc).timestamp())
 
 
-def get_embedding_dimension() -> int:
-    response = openai_client.embeddings.create(
-        model=EMBEDDING_MODEL,
-        input=["dimension probe"],
-    )
-    return len(response.data[0].embedding)
-
-
-def ensure_index(index_name: str):
-    existing = pc.list_indexes().names()
-    if index_name not in existing:
-        dimension = get_embedding_dimension()
-        pc.create_index(
-            name=index_name,
-            dimension=dimension,
-            metric="cosine",
-            spec=ServerlessSpec(
-                cloud=PINECONE_CLOUD,
-                region=PINECONE_REGION,
-            ),
-        )
-    return pc.Index(index_name)
-
-
 def embed_texts(texts: List[str]) -> List[List[float]]:
-    cleaned = [clean_text(t) or " " for t in texts]
+    cleaned = [clean_text(text) or " " for text in texts]
     response = openai_client.embeddings.create(
         model=EMBEDDING_MODEL,
         input=cleaned,
@@ -89,9 +37,6 @@ def fetch_hn_stories(
     hits_per_page: int = 100,
     polite_sleep_s: float = 0.25,
 ) -> List[Dict[str, Any]]:
-    """
-    Fetch recent HN stories from Algolia, sorted by date, filtered by points.
-    """
     now = datetime.now(timezone.utc)
     start_dt = now - timedelta(days=30 * months_back)
     start_ts = to_unix_seconds(start_dt)
@@ -183,6 +128,13 @@ def story_to_document(story: Dict[str, Any]) -> str:
     return "\n".join(part for part in parts if clean_text(part))
 
 
+def average_story_chars(stories: List[Dict[str, Any]]) -> float:
+    docs = [story_to_document(story) for story in stories]
+    if not docs:
+        return 0.0
+    return sum(len(doc) for doc in docs) / len(docs)
+
+
 def upsert_stories(
     index,
     stories: List[Dict[str, Any]],
@@ -197,25 +149,23 @@ def upsert_stories(
         embeddings = embed_texts(docs)
 
         vectors = []
-        for story, emb, doc in zip(batch, embeddings, docs):
-            metadata = {
-                "kind": "story",
-                "object_id": story["object_id"],
-                "title": story.get("title", ""),
-                "url": story.get("url", ""),
-                "author": story.get("author", ""),
-                "points": int(story.get("points", 0)),
-                "num_comments": int(story.get("num_comments", 0)),
-                "created_at": story.get("created_at", ""),
-                "created_at_i": int(story.get("created_at_i") or 0),
-                "text": doc,
-            }
-
+        for story, embedding, doc in zip(batch, embeddings, docs):
             vectors.append(
                 {
                     "id": story["id"],
-                    "values": emb,
-                    "metadata": metadata,
+                    "values": embedding,
+                    "metadata": {
+                        "kind": "story",
+                        "object_id": story["object_id"],
+                        "title": story.get("title", ""),
+                        "url": story.get("url", ""),
+                        "author": story.get("author", ""),
+                        "points": int(story.get("points", 0)),
+                        "num_comments": int(story.get("num_comments", 0)),
+                        "created_at": story.get("created_at", ""),
+                        "created_at_i": int(story.get("created_at_i") or 0),
+                        "text": doc,
+                    },
                 }
             )
 
@@ -271,39 +221,51 @@ def semantic_search(
 
     matches = []
     for match in results.matches:
-        md = match.metadata or {}
+        metadata = match.metadata or {}
         matches.append(
             {
                 "id": match.id,
                 "score": float(match.score),
-                "title": md.get("title", ""),
-                "url": md.get("url", ""),
-                "author": md.get("author", ""),
-                "points": md.get("points", 0),
-                "num_comments": md.get("num_comments", 0),
-                "created_at": md.get("created_at", ""),
-                "text": md.get("text", ""),
+                "title": metadata.get("title", ""),
+                "url": metadata.get("url", ""),
+                "author": metadata.get("author", ""),
+                "points": metadata.get("points", 0),
+                "num_comments": metadata.get("num_comments", 0),
+                "created_at": metadata.get("created_at", ""),
+                "text": metadata.get("text", ""),
             }
         )
 
     return matches
 
 
+def print_semantic_matches(matches: List[Dict[str, Any]]) -> None:
+    print("\nSemantic matches:\n")
+    for i, match in enumerate(matches, start=1):
+        print(f"{i}. {match['title']}")
+        print(
+            f"   score={match['score']:.4f} | points={match['points']} | comments={match['num_comments']}"
+        )
+        print(f"   author={match['author']} | date={match['created_at']}")
+        print(f"   url={match['url']}")
+        print()
+
+
 def build_answer_prompt(query: str, matches: List[Dict[str, Any]]) -> str:
     context_blocks = []
 
-    for i, m in enumerate(matches, start=1):
+    for i, match in enumerate(matches, start=1):
         context_blocks.append(
             "\n".join(
                 [
                     f"[Source {i}]",
-                    f"Title: {m.get('title', '')}",
-                    f"Author: {m.get('author', '')}",
-                    f"Points: {m.get('points', 0)}",
-                    f"Comments: {m.get('num_comments', 0)}",
-                    f"Date: {m.get('created_at', '')}",
-                    f"URL: {m.get('url', '')}",
-                    f"Content: {m.get('text', '')}",
+                    f"Title: {match.get('title', '')}",
+                    f"Author: {match.get('author', '')}",
+                    f"Points: {match.get('points', 0)}",
+                    f"Comments: {match.get('num_comments', 0)}",
+                    f"Date: {match.get('created_at', '')}",
+                    f"URL: {match.get('url', '')}",
+                    f"Content: {match.get('text', '')}",
                 ]
             )
         )
@@ -322,103 +284,8 @@ def build_answer_prompt(query: str, matches: List[Dict[str, Any]]) -> str:
 
 def answer_with_llm(query: str, matches: List[Dict[str, Any]]) -> str:
     prompt = build_answer_prompt(query, matches)
-
     response = openai_client.responses.create(
         model=CHAT_MODEL,
         input=prompt,
     )
-
     return response.output_text.strip()
-
-
-def run_ingest(args: argparse.Namespace) -> None:
-    index = ensure_index(INDEX_NAME)
-
-    stories = fetch_hn_stories(
-        max_stories=args.max_stories,
-        min_points=args.min_points,
-        months_back=args.months_back,
-        hits_per_page=args.hits_per_page,
-        polite_sleep_s=args.sleep,
-    )
-
-    if not stories:
-        print("No stories found.")
-        return
-
-    upsert_stories(
-        index=index,
-        stories=stories,
-        namespace=NAMESPACE,
-        batch_size=args.batch_size,
-    )
-
-
-def run_search(args: argparse.Namespace) -> None:
-    index = ensure_index(INDEX_NAME)
-
-    matches = semantic_search(
-        index=index,
-        query=args.query,
-        namespace=NAMESPACE,
-        top_k=args.top_k,
-        min_points=args.filter_min_points,
-        months_back=args.filter_months_back,
-    )
-
-    if not matches:
-        print("No matches found.")
-        return
-
-    print("\nSemantic matches:\n")
-    for i, m in enumerate(matches, start=1):
-        print(f"{i}. {m['title']}")
-        print(f"   score={m['score']:.4f} | points={m['points']} | comments={m['num_comments']}")
-        print(f"   author={m['author']} | date={m['created_at']}")
-        print(f"   url={m['url']}")
-        print()
-
-    if args.answer:
-        answer = answer_with_llm(args.query, matches)
-        print("\nAnswer:\n")
-        print(answer)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Semantic Hacker News story search with Pinecone + OpenAI"
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    ingest = subparsers.add_parser("ingest", help="Fetch HN stories and index them")
-    ingest.add_argument("--max-stories", type=int, default=2000)
-    ingest.add_argument("--min-points", type=int, default=50)
-    ingest.add_argument("--months-back", type=int, default=12)
-    ingest.add_argument("--hits-per-page", type=int, default=100)
-    ingest.add_argument("--batch-size", type=int, default=100)
-    ingest.add_argument("--sleep", type=float, default=0.25)
-
-    search = subparsers.add_parser("search", help="Run semantic search")
-    search.add_argument("query", type=str)
-    search.add_argument("--top-k", type=int, default=10)
-    search.add_argument("--filter-min-points", type=int, default=None)
-    search.add_argument("--filter-months-back", type=int, default=None)
-    search.add_argument("--answer", action="store_true")
-
-    return parser
-
-
-def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
-
-    if args.command == "ingest":
-        run_ingest(args)
-    elif args.command == "search":
-        run_search(args)
-    else:
-        parser.print_help()
-
-
-if __name__ == "__main__":
-    main()

@@ -26,24 +26,67 @@ PINECONE_CLOUD=aws
 PINECONE_REGION=us-east-1
 ```
 
+## Scripts
+
+- `hn_ingest.py`: fetches stories, estimates ingest cost, asks for confirmation, and upserts to Pinecone
+- `hn_search.py`: runs semantic retrieval and optional grounded answers
+- `hn_costs.py`: standalone what-if cost calculator
+
 ## Usage
 
 Ingest stories:
 
 ```bash
-python hn_semantic.py ingest --max-stories 2000 --min-points 50 --months-back 12
+python hn_ingest.py --max-stories 2000 --min-points 50 --months-back 12
+```
+
+The ingest command prints an estimated OpenAI embedding cost and Pinecone write/storage footprint, then asks for confirmation before it upserts anything.
+
+Skip the confirmation prompt:
+
+```bash
+python hn_ingest.py --max-stories 2000 --min-points 50 --months-back 12 --yes
+```
+
+Include Pinecone pricing in the estimate:
+
+```bash
+python hn_ingest.py \
+  --max-stories 2000 \
+  --min-points 50 \
+  --months-back 12 \
+  --pinecone-storage-price-per-gb-month YOUR_STORAGE_PRICE \
+  --pinecone-write-price-per-million-wu YOUR_WRITE_PRICE
 ```
 
 Search:
 
 ```bash
-python hn_semantic.py search "threads about AI replacing junior developers" --top-k 8
+python hn_search.py "threads about AI replacing junior developers" --top-k 8
 ```
 
 Search with a grounded answer:
 
 ```bash
-python hn_semantic.py search "What does HN think about remote work burnout?" --top-k 8 --answer
+python hn_search.py "What does HN think about remote work burnout?" --top-k 8 --answer
+```
+
+Estimate OpenAI and Pinecone costs ahead of time:
+
+```bash
+python hn_costs.py --stories 2000 --queries-per-month 5000 --answer-rate 0.25
+```
+
+Estimate costs with Pinecone pricing plugged in:
+
+```bash
+python hn_costs.py \
+  --stories 2000 \
+  --queries-per-month 5000 \
+  --answer-rate 0.25 \
+  --pinecone-storage-price-per-gb-month YOUR_STORAGE_PRICE \
+  --pinecone-read-price-per-million-ru YOUR_READ_PRICE \
+  --pinecone-write-price-per-million-wu YOUR_WRITE_PRICE
 ```
 
 ## What It Does
@@ -59,3 +102,6 @@ python hn_semantic.py search "What does HN think about remote work burnout?" --t
 - This version indexes stories only, which keeps the first version simple and much smaller.
 - If you want "what HN thinks" to get better, the next upgrade is adding selected comments as separate vectors.
 - Algolia HN search is relevance-oriented and filterable, but not vector/semantic search, so this project adds a different retrieval layer on top.
+- `hn_ingest.py` estimates the cost of the pending ingest and asks for confirmation before embedding and upserting.
+- `hn_costs.py` is still useful for what-if planning, and uses OpenAI's current public prices for `text-embedding-3-small` and `gpt-5.4-mini` by default while estimating Pinecone usage from vector size, read units, and write units.
+- Pinecone pricing varies by plan and can change over time, so the script lets you pass the current storage, read, and write rates as CLI flags when you want dollar totals.
