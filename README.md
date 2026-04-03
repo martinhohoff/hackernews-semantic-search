@@ -5,12 +5,6 @@ Semantic search over recent Hacker News stories using OpenAI embeddings and Pine
 ## Install
 
 ```bash
-pip install openai pinecone requests python-dotenv
-```
-
-Or:
-
-```bash
 pip install -r requirements.txt
 ```
 
